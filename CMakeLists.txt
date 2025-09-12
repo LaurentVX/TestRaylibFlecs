@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 
-# enable hot reload
+# enable visual studio hot reload
 if (MSVC AND WIN32 AND NOT MSVC_VERSION VERSION_LESS 142)
 
     # option 1: put the following command before the creation of the first
@@ -60,6 +60,21 @@ endif()
 # Add the tinyfiledialogs source file directly to your project's sources
 list(APPEND SOURCES ${tinyfiledialogs_source_SOURCE_DIR}/tinyfiledialogs.c)
 
+# --- Dependency: raygui (Header-Only with implementation) ---
+FetchContent_Declare(
+  raygui_source
+  GIT_REPOSITORY https://github.com/raysan5/raygui.git
+  GIT_TAG        master # Consider using a specific tag for stability
+)
+FetchContent_GetProperties(raygui_source)
+if(NOT raygui_source_POPULATED)
+  FetchContent_Populate(raygui_source)
+endif()
+
+# Create a file to contain the raygui implementation
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/raygui_impl.cpp "#define RAYGUI_IMPLEMENTATION\n#include \"raygui.h\"\n")
+list(APPEND SOURCES ${CMAKE_CURRENT_BINARY_DIR}/raygui_impl.cpp)
+
 # Create the executable for your project
 add_executable(MyProject ${SOURCES})
 
@@ -67,6 +82,7 @@ add_executable(MyProject ${SOURCES})
 target_include_directories(MyProject PRIVATE 
     src
     ${tinyfiledialogs_source_SOURCE_DIR}
+    ${raygui_source_SOURCE_DIR}/src
 )
 
 # --- Dependency: flecs ---
@@ -98,34 +114,34 @@ FetchContent_MakeAvailable(raylib)
 #FetchContent_MakeAvailable(Chipmunk2D)
 
 # --- Dependency: nuklear (Header-Only) ---
-FetchContent_Declare(
-  nuklear_source
-  GIT_REPOSITORY https://github.com/vurtun/nuklear.git
-  GIT_TAG        master
-)
-FetchContent_MakeAvailable(nuklear_source)
+#FetchContent_Declare(
+#  nuklear_source
+#  GIT_REPOSITORY https://github.com/vurtun/nuklear.git
+#  GIT_TAG        master
+#)
+#FetchContent_MakeAvailable(nuklear_source)
 
 # Add an INTERFACE library for nuklear to provide its include directory
-add_library(nuklear INTERFACE)
-target_include_directories(nuklear INTERFACE ${nuklear_source_SOURCE_DIR})
+#add_library(nuklear INTERFACE)
+#target_include_directories(nuklear INTERFACE ${nuklear_source_SOURCE_DIR})
 
 # --- Dependency: cJSON ---
 # Disable building tests for cJSON
-set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  cJSON
-  GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
-  GIT_TAG        master # Consider using a specific tag for stability
-)
-FetchContent_MakeAvailable(cJSON)
+#set(ENABLE_CJSON_TEST OFF CACHE BOOL "" FORCE)
+#FetchContent_Declare(
+#  cJSON
+#  GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+#  GIT_TAG        master # Consider using a specific tag for stability
+#)
+#FetchContent_MakeAvailable(cJSON)
 
 # Link all the fetched libraries to your executable
 target_link_libraries(MyProject PRIVATE
     flecs
     raylib
     #chipmunk # This is commented out as Chipmunk2D is disabled above
-    nuklear
-    cjson
+    #nuklear
+    #cjson
 )
 
 # Build dependencies as static libraries
