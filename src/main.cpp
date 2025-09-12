@@ -181,7 +181,7 @@ struct MyProjectGuiState
 {
 	int entityCountSpinnerValue = 1;
 	//bool entityCountSpinnerEditMode = false;
-	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 320 };
+	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 360 };
 };
 
 void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
@@ -196,10 +196,11 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 
     GuiLabel({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 40, 180, 25 }, TextFormat("Total Entities: %d", world.count<Position>()));
 
-    if (GuiSpinner({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 75, 180, 25 }, "Count:", &guiState.entityCountSpinnerValue, 1, 1000, true))
-    {
-        //guiState.entityCountSpinnerEditMode = !guiState.entityCountSpinnerEditMode;
-    }
+	int newCount = GuiSpinner({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 75, 120, 25 }, "Add/Remove", &guiState.entityCountSpinnerValue, 1, 100, false);
+// 	if (newCount)
+//     {
+//         guiState.entityCountSpinnerValue += newCount;
+//     }
 
     if (GuiButton({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 110, 85, 30 }, "Add"))
     {
@@ -211,8 +212,8 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 
     if (GuiButton({ guiState.windowBoxRect.x + 105, guiState.windowBoxRect.y + 110, 85, 30 }, "Remove"))
     {
-        auto q = world.query<Position>();
-        int count_to_remove = guiState.entityCountSpinnerValue;
+//         auto q = world.query<Position>();
+//         int count_to_remove = guiState.entityCountSpinnerValue;
 
 
 		// Query and delete one entity
@@ -254,10 +255,13 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 
 	GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 230, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 10.f, 100.0f);
 
-	GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 260, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 100.f, 5000.f);
+    if (GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 270, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 100.f, 5000.f))
+    {
+        world.modified<GameState>();
+    }
 
 
-    GuiCheckBox({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 290, 90, 25 }, "Render entities:", &game_state.renderEntities);
+    GuiCheckBox({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 310, 40, 25 }, "Render entities:", &game_state.renderEntities);
 }
 
 void DrawLogPanel()
@@ -340,6 +344,22 @@ void DeclareBounceSystem(flecs::world& world)
             });
 }
 
+void DeclareGameStateObserver(flecs::world& world)
+{
+    world.observer<GameState>()
+        .event(flecs::OnSet)
+        .each([&](flecs::entity e, GameState& gs)
+        {
+            // update velocity
+
+            //std::cout << "Position set: {" << p.x << ", " << p.y << "}\n";
+				world.query<Velocity>().each([&](flecs::entity e, Velocity& v)
+				{
+                    v = { Vector3Scale(Vector3Normalize(v.value), gs.entitySpeed) };
+				});
+        });
+}
+
 void DeclareMoveSystem(flecs::world& world)
 {
     // System to update position based on velocity
@@ -349,6 +369,10 @@ void DeclareMoveSystem(flecs::world& world)
             const float clampedDeltaTime = std::min(world.delta_time(), 0.33f);
             p.value = Vector3Add(p.value, Vector3Scale(v.value, clampedDeltaTime));
          });
+
+
+
+
 }
 
 void DeclareCollideSystem(flecs::world& world)
@@ -421,7 +445,7 @@ void RenderEntities(flecs::world& world)
     });
 }
 
-void DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, flecs::world& world)
+void DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, MyProjectGuiState& guiState, flecs::world& world)
 {
     // --- Main Game Loop ---
     while (!WindowShouldClose())
@@ -459,9 +483,9 @@ void DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, flecs::world& w
 
         EndMode3D();
 
-        MyProjectGuiState projectGuiState;
 
-        DrawGUI(projectGuiState, world);
+
+        DrawGUI(guiState, world);
 
         DrawLogPanel();
 
@@ -502,6 +526,7 @@ int main(void)
     world.set<GameState>({});
 
     // --- Systems Definition ---
+    DeclareGameStateObserver(world);
     DeclareMoveSystem(world);
     DeclareCollideSystem(world);
     DeclareBounceSystem(world);
@@ -515,7 +540,9 @@ int main(void)
 
     bool cameraControlsEnabled = true;
 
-    DoMainGameLoop(cameraControlsEnabled, camera, world);
+    MyProjectGuiState projectGuiState;
+
+    DoMainGameLoop(cameraControlsEnabled, camera, projectGuiState, world);
 
 
     // --- De-Initialization ---
