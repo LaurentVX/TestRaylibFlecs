@@ -61,6 +61,7 @@ const int INITIAL_ENTITY_COUNT = 10;
 
 struct GameState
 {
+    bool renderEntities = true;
     float gridSize = 250.0f;
 	float entitySize = 10.0f; // Increased entity size
 	float entitySpeed = 1500.0f; // Adjusted for better visualization
@@ -82,14 +83,6 @@ flecs::query<GameState> get_game_state_update_query(const flecs::world& world)
         //.singleton()
         .build();
 }
-
-// Set singleton component
-// ecs.set<Gravity>({ 9.81 });
-// 
-// Get singleton component
-// const Gravity& g = world.get<Gravity>();
-
-
 
 // --- Components ---
 struct Position { Vector3 value; };
@@ -119,13 +112,18 @@ Color GetRandomColor() {
     };
 }
 
-void DrawXYGrid(int slices, float spacing) {
+void DrawXYGrid(int slices, float spacing) 
+{
     int halfSlices = slices/2;
-    for (int i = -halfSlices; i <= halfSlices; i++) {
-        if (i == 0) {
+    for (int i = -halfSlices; i <= halfSlices; i++) 
+    {
+        if (i == 0) 
+        {
             DrawLine3D({ -halfSlices*spacing, 0.0f, 0.0f }, { halfSlices*spacing, 0.0f, 0.0f }, BLUE);
             DrawLine3D({ 0.0f, -halfSlices*spacing, 0.0f }, { 0.0f, halfSlices*spacing, 0.0f }, RED);
-        } else {
+        } 
+        else 
+        {
             DrawLine3D({ -halfSlices*spacing, i*spacing, 0.0f }, { halfSlices*spacing, i*spacing, 0.0f }, LIGHTGRAY);
             DrawLine3D({ i*spacing, -halfSlices*spacing, 0.0f }, { i*spacing, halfSlices*spacing, 0.0f }, LIGHTGRAY);
         }
@@ -143,7 +141,8 @@ void CreateEntity(flecs::world& world)
     const GameState& game_state = world.get<GameState>();
 
 
-    do {
+    do 
+    {
         positionIsValid = true;
         newPos = 
         { 
@@ -182,10 +181,10 @@ struct MyProjectGuiState
 {
 	int entityCountSpinnerValue = 1;
 	bool entityCountSpinnerEditMode = false;
-	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 225 };
+	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 260 };
 };
 
-void DrawGUI(MyProjectGuiState& guiState, flecs::world& ecs)
+void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 {
     // --- Draw GUI ---
     if (GuiWindowBox(guiState.windowBoxRect, "Entity Controls"))
@@ -193,9 +192,9 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& ecs)
     }
 
     // Get a mutable reference to the GameState singleton
-    GameState& game_state = ecs.ensure<GameState>();
+    GameState& game_state = world.ensure<GameState>();
 
-    GuiLabel({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 40, 180, 25 }, TextFormat("Total Entities: %d", ecs.count<Position>()));
+    GuiLabel({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 40, 180, 25 }, TextFormat("Total Entities: %d", world.count<Position>()));
 
     if (GuiSpinner({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 75, 180, 25 }, "Count:", &guiState.entityCountSpinnerValue, 0, 1000, guiState.entityCountSpinnerEditMode))
     {
@@ -206,20 +205,20 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& ecs)
     {
         for (int i = 0; i < guiState.entityCountSpinnerValue; ++i)
         {
-            CreateEntity(ecs);
+            CreateEntity(world);
         }
     }
 
     if (GuiButton({ guiState.windowBoxRect.x + 105, guiState.windowBoxRect.y + 110, 85, 30 }, "Remove"))
     {
-        auto q = ecs.query<Position>();
+        auto q = world.query<Position>();
         int count_to_remove = guiState.entityCountSpinnerValue;
 
 
 		// Query and delete one entity with Health <= 0
         flecs::entity remember;
-		ecs.query<Position>().each([&](flecs::entity e, Position& h)
-			{
+		world.query<Position>().each([&](flecs::entity e, Position& h)
+		{
 				//if (h.value <= 0)
 				{
 					//std::cout << "Deleting: " << e.name() << "\n";
@@ -229,7 +228,7 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& ecs)
                     remember = e;
 					return;
 				}
-			});
+		});
 
         if (remember.is_valid() && remember.is_alive())
 		{
@@ -240,10 +239,12 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& ecs)
     if (GuiButton({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 150, 180, 30 }, "Remove All"))
     {
         TraceLog(LOG_INFO, "Removing all entities.");
-		ecs.delete_with<Position>(); // Deletes all entities with Position
+		world.delete_with<Position>(); // Deletes all entities with Position
     }
 
-    GuiSlider({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 190, 180, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
+    GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 190, 90, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
+
+    GuiCheckBox({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 230, 90, 25 }, "Render entities:", &game_state.renderEntities);
 }
 
 void DrawLogPanel()
@@ -332,7 +333,8 @@ void DeclareMoveSystem(flecs::world& world)
     world.system<Position, const Velocity>("Move")
         .each([&](flecs::entity e, Position& p, const Velocity& v)
          {
-            p.value = Vector3Add(p.value, Vector3Scale(v.value, world.delta_time()));
+            const float clampedDeltaTime = std::min(world.delta_time(), 0.33f);
+            p.value = Vector3Add(p.value, Vector3Scale(v.value, clampedDeltaTime));
          });
 }
 
@@ -397,6 +399,10 @@ void RenderEntities(flecs::world& world)
     world.each([&](flecs::entity e, const Position& p, const ColorComp& c)
     {
         const GameState& game_state = world.get<GameState>();
+        if (!game_state.renderEntities)
+        {
+            return;
+        }
 
         DrawSphere(p.value, game_state.entitySize, c.value);
     });
