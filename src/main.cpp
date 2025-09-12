@@ -180,8 +180,8 @@ void CreateEntity(flecs::world& world)
 struct MyProjectGuiState
 {
 	int entityCountSpinnerValue = 1;
-	bool entityCountSpinnerEditMode = false;
-	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 260 };
+	//bool entityCountSpinnerEditMode = false;
+	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 320 };
 };
 
 void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
@@ -196,7 +196,7 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 
     GuiLabel({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 40, 180, 25 }, TextFormat("Total Entities: %d", world.count<Position>()));
 
-    if (GuiSpinner({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 75, 180, 25 }, "Count:", &guiState.entityCountSpinnerValue, 0, 1000, guiState.entityCountSpinnerEditMode))
+    if (GuiSpinner({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 75, 180, 25 }, "Count:", &guiState.entityCountSpinnerValue, 1, 1000, true))
     {
         //guiState.entityCountSpinnerEditMode = !guiState.entityCountSpinnerEditMode;
     }
@@ -215,24 +215,32 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
         int count_to_remove = guiState.entityCountSpinnerValue;
 
 
-		// Query and delete one entity with Health <= 0
-        flecs::entity remember;
-		world.query<Position>().each([&](flecs::entity e, Position& h)
-		{
-				//if (h.value <= 0)
-				{
-					//std::cout << "Deleting: " << e.name() << "\n";
-                    TraceLog(LOG_INFO, "Deleting entity %s", e.name().c_str());
-					//e.destruct();
-                    //e.is_alive(); // false!
-                    remember = e;
-					return;
-				}
+		// Query and delete one entity
+//       flecs::entity toDelete;
+//       world.query<Position>().run([&](flecs::iter& it)
+//       {
+//           while (it.next())
+//           {
+//               for (auto i : it)
+//               {
+//                   flecs::entity e = it.entity(i);
+//                   toDelete = e;
+//                   return;
+//               }
+//           }
+//       });
+
+		flecs::entity toDelete;
+        world.query<Position>().each([&](flecs::entity e, Position& h)
+        {
+			toDelete = e;
+            return;
 		});
 
-        if (remember.is_valid() && remember.is_alive())
+        if (toDelete.is_valid() && toDelete.is_alive())
 		{
-			remember.destruct();
+            TraceLog(LOG_INFO, "Deleting entity %s", toDelete.name().c_str());
+			toDelete.destruct();
         }
     }
 
@@ -244,7 +252,12 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 
     GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 190, 90, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
 
-    GuiCheckBox({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 230, 90, 25 }, "Render entities:", &game_state.renderEntities);
+	GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 230, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 10.f, 100.0f);
+
+	GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 260, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 100.f, 5000.f);
+
+
+    GuiCheckBox({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 290, 90, 25 }, "Render entities:", &game_state.renderEntities);
 }
 
 void DrawLogPanel()
@@ -408,7 +421,7 @@ void RenderEntities(flecs::world& world)
     });
 }
 
-bool DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, flecs::world& world)
+void DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, flecs::world& world)
 {
     // --- Main Game Loop ---
     while (!WindowShouldClose())
@@ -457,7 +470,16 @@ bool DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, flecs::world& w
         DrawFPS(10, 40);
 
         EndDrawing();
-    } return cameraControlsEnabled;
+    }
+}
+
+void InitCamera3D(Camera3D& camera)
+{
+    camera.position = { 0.0f, 0.0f, 2000.f }; // Adjusted camera distance
+    camera.target = { 0.0f, 0.0f, 0.0f };
+    camera.up = { 0.0f, 1.0f, 0.0f };
+    camera.fovy = 45.0f;
+    camera.projection = CAMERA_PERSPECTIVE;
 }
 
 int main(void)
@@ -486,21 +508,14 @@ int main(void)
 
     CreateInitialEntities(world);
 
-
-
-
     // --- Raylib Camera Setup ---
     Camera3D camera = { 0 };
-    camera.position = { 0.0f, 0.0f, 2000.f }; // Adjusted camera distance
-    camera.target = { 0.0f, 0.0f, 0.0f };
-    camera.up = { 0.0f, 1.0f, 0.0f };
-    camera.fovy = 45.0f;
-    camera.projection = CAMERA_PERSPECTIVE;
+    InitCamera3D(camera);
+
 
     bool cameraControlsEnabled = true;
 
-
-    cameraControlsEnabled = DoMainGameLoop(cameraControlsEnabled, camera, world);
+    DoMainGameLoop(cameraControlsEnabled, camera, world);
 
 
     // --- De-Initialization ---

@@ -145,4 +145,4 @@ target_link_libraries(MyProject PRIVATE
 )
 
 # Build dependencies as static libraries
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build dependencies as static libraries")
+#set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build dependencies as static libraries")
