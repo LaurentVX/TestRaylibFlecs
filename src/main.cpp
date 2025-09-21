@@ -265,87 +265,98 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 
     //static const char* TabNames[] = { "Tab1","Tab2", "Tab3" };
     yOffset += 30.f;
-    int TabBarResult = GuiToggleGroup({ guiState.windowBoxRect.x + 10, yOffset, 40, 25 }, "Tab1;Tab2;Tab3", &guiState.activeTab);
+    int TabBarResult = GuiToggleGroup({ guiState.windowBoxRect.x + 10, yOffset, 40, 25 }, "Tab1;Tab2;Tab3;Tab4", &guiState.activeTab);
+    if (guiState.activeTab == 0)
+    {
+        // Get a mutable reference to the GameState singleton
+        GameState& game_state = world.ensure<GameState>();
 
-    // Get a mutable reference to the GameState singleton
-    GameState& game_state = world.ensure<GameState>();
+        yOffset += 60.f;
+        GuiLabel({ guiState.windowBoxRect.x + 10, yOffset, 120, 25 }, TextFormat("Total Entities: %d", world.count<Position>()));
 
-    yOffset += 60.f;
-    GuiLabel({ guiState.windowBoxRect.x + 10, yOffset, 25 }, TextFormat("Total Entities: %d", world.count<Position>()));
-
-    yOffset += 30.f;
-	int newCount = GuiSpinner({ guiState.windowBoxRect.x + 10, yOffset, 120, 25 }, "Add/Remove", &guiState.entityCountSpinnerValue, 1, 100, false);
-// 	if (newCount)
-//     {
-//         guiState.entityCountSpinnerValue += newCount;
-//     }
+        yOffset += 30.f;
+	    int newCount = GuiSpinner({ guiState.windowBoxRect.x + 10, yOffset, 120, 25 }, "Add/Remove", &guiState.entityCountSpinnerValue, 1, 100, false);
+    // 	if (newCount)
+    //     {
+    //         guiState.entityCountSpinnerValue += newCount;
+    //     }
     
-    yOffset += 30.f;
-    if (GuiButton({ guiState.windowBoxRect.x + 10, yOffset, 85, 30 }, "Add"))
-    {
-        for (int i = 0; i < guiState.entityCountSpinnerValue; ++i)
+        yOffset += 30.f;
+        if (GuiButton({ guiState.windowBoxRect.x + 10, yOffset, 85, 30 }, "Add"))
         {
-            CreateEntity(world);
+            for (int i = 0; i < guiState.entityCountSpinnerValue; ++i)
+            {
+                CreateEntity(world);
+            }
         }
-    }
 
-    yOffset += 30.f;
-    if (GuiButton({ guiState.windowBoxRect.x + 105, yOffset, 85, 30 }, "Remove"))
-    {
-//         auto q = world.query<Position>();
-//         int count_to_remove = guiState.entityCountSpinnerValue;
-
-
-		// Query and delete one entity
-//       flecs::entity toDelete;
-//       world.query<Position>().run([&](flecs::iter& it)
-//       {
-//           while (it.next())
-//           {
-//               for (auto i : it)
-//               {
-//                   flecs::entity e = it.entity(i);
-//                   toDelete = e;
-//                   return;
-//               }
-//           }
-//       });
-
-		flecs::entity toDelete;
-        world.query<Position>().each([&](flecs::entity e, Position& h)
+        yOffset += 30.f;
+        if (GuiButton({ guiState.windowBoxRect.x + 105, yOffset, 85, 30 }, "Remove"))
         {
-			toDelete = e;
-            return;
-		});
+    //         auto q = world.query<Position>();
+    //         int count_to_remove = guiState.entityCountSpinnerValue;
 
-        if (toDelete.is_valid() && toDelete.is_alive())
-		{
-            TraceLog(LOG_INFO, "Deleting entity %s", toDelete.name().c_str());
-			toDelete.destruct();
+
+		    // Query and delete one entity
+    //       flecs::entity toDelete;
+    //       world.query<Position>().run([&](flecs::iter& it)
+    //       {
+    //           while (it.next())
+    //           {
+    //               for (auto i : it)
+    //               {
+    //                   flecs::entity e = it.entity(i);
+    //                   toDelete = e;
+    //                   return;
+    //               }
+    //           }
+    //       });
+
+		    flecs::entity toDelete;
+            world.query<Position>().each([&](flecs::entity e, Position& h)
+            {
+			    toDelete = e;
+                return;
+		    });
+
+            if (toDelete.is_valid() && toDelete.is_alive())
+		    {
+                TraceLog(LOG_INFO, "Deleting entity %s", toDelete.name().c_str());
+			    toDelete.destruct();
+            }
         }
-    }
 
-    yOffset += 30.f;
-    if (GuiButton({ guiState.windowBoxRect.x + 10, yOffset, 180, 30 }, "Remove All"))
-    {
-        TraceLog(LOG_INFO, "Removing all entities.");
-		world.delete_with<Position>(); // Deletes all entities with Position
-    }
+        yOffset += 30.f;
+        if (GuiButton({ guiState.windowBoxRect.x + 10, yOffset, 180, 30 }, "Remove All"))
+        {
+            TraceLog(LOG_INFO, "Removing all entities.");
+		    world.delete_with<Position>(); // Deletes all entities with Position
+        }
 
-    yOffset += 30.f;
-    GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
+        yOffset += 30.f;
+        GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
 
-    yOffset += 30.f;
-	GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 0.01f, 100.0f);
+        yOffset += 30.f;
+	    GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 0.01f, 100.0f);
 
-    yOffset += 30.f;
-    if (GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 0.f, 5000.f))
-    {
-        world.modified<GameState>();
-    }
+        yOffset += 30.f;
+        if (GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 0.f, 5000.f))
+        {
+            world.modified<GameState>();
+        }
 
-    yOffset += 30.f;
-    GuiCheckBox({ guiState.windowBoxRect.x + 10, yOffset, 40, 25 }, "Render entities:", &game_state.renderEntities);
+        yOffset += 30.f;
+        GuiCheckBox({ guiState.windowBoxRect.x + 10, yOffset, 40, 25 }, "Render entities:", &game_state.renderEntities);
+	}
+	else if (guiState.activeTab == 1)
+	{
+		// Get a mutable reference to the GameState singleton
+		GameState& game_state = world.ensure<GameState>();
+
+		yOffset += 30.f;
+		GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Flecs logs level:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 0.01f, 100.0f);
+
+	}
 }
 
 void DrawLogPanel()
