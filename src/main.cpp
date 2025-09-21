@@ -1,4 +1,3 @@
-
 #include "flecs.h"
 #include <vector>
 #include <random>
@@ -7,11 +6,14 @@
 #include <string>
 #include <mutex>
 #include <stdarg.h>
+#include <unordered_map>
+#include <cstdint>
+#include <cmath>
 
 //I have removed the #define RAYGUI_IMPLEMENTATION line.This ensures that the implementation is only compiled once in the raygui_impl.cpp file that CMake generates, which will resolve the linker error.
 //#define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
-#include "raylib.h"
+#include "raylib.h" 
 #include "raymath.h" // Required for Vector3 functions
 
 #define RLIGHTS_IMPLEMENTATION
@@ -91,7 +93,7 @@ struct RenderingData
 };
 
 
-//Camera3D camera, MyProjectGuiState& guiState, flecs::world& world
+//Camera3D camera, MyProjectGuiState& guiState, flecs::world
 
 // --- GUI State ---
 struct MyProjectGuiState
@@ -99,6 +101,7 @@ struct MyProjectGuiState
 	int entityCountSpinnerValue = 1;
 	//bool entityCountSpinnerEditMode = false;
 	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 360 };
+    int activeTab = 0;
 };
 
 
@@ -114,6 +117,23 @@ struct GameData
 	//MyProjectGuiState projectGuiState;
 };
 
+// --- Spatial grid cell index for broadphase collision
+struct SpatialCell { int cellX; int cellY; };
+
+// --- Buckets for entities per spatial cell (rebuilt every frame)
+static std::unordered_map<long long, std::vector<flecs::entity>> g_cellBuckets;
+
+static inline long long CellKey(int x, int y)
+{
+    return (static_cast<long long>(x) << 32) ^ static_cast<unsigned long long>(y);
+}
+
+static inline std::pair<int, int> ComputeCell(const Vector3& p, float cellSize)
+{
+    const int cx = static_cast<int>(std::floor(p.x / cellSize));
+    const int cy = static_cast<int>(std::floor(p.y / cellSize));
+    return { cx, cy };
+}
 
 
 flecs::query<const GameState> get_game_state_query(const flecs::world& world)
@@ -136,23 +156,29 @@ flecs::query<GameState> get_game_state_update_query(const flecs::world& world)
 // --- Components ---
 struct Position { Vector3 value; };
 struct Velocity { Vector3 value; };
-struct ColorComp { Color value; };
+struct ColorComp
+{
+    Color value;
+};
 
 // --- UI State ---
-struct UIState {
-    struct nk_context *ctx;
-    struct nk_font_atlas *atlas;
+struct UIState
+{
+    struct nk_context* ctx;
+    struct nk_font_atlas* atlas;
 };
 
 // --- Helper Functions ---
-float GetRandomFloat(float min, float max) {
+float GetRandomFloat(float min, float max)
+{
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(min, max);
     return dis(gen);
 }
 
-Color GetRandomColor() {
+Color GetRandomColor()
+{
     return {
         (unsigned char)GetRandomValue(50, 255),
         (unsigned char)GetRandomValue(50, 255),
@@ -161,26 +187,26 @@ Color GetRandomColor() {
     };
 }
 
-void DrawXYGrid(int slices, float spacing) 
+void DrawXYGrid(int slices, float spacing)
 {
-    int halfSlices = slices/2;
-    for (int i = -halfSlices; i <= halfSlices; i++) 
+    int halfSlices = slices / 2;
+    for (int i = -halfSlices; i <= halfSlices; i++)
     {
-        if (i == 0) 
+        if (i == 0)
         {
-            DrawLine3D({ -halfSlices*spacing, 0.0f, 0.0f }, { halfSlices*spacing, 0.0f, 0.0f }, BLUE);
-            DrawLine3D({ 0.0f, -halfSlices*spacing, 0.0f }, { 0.0f, halfSlices*spacing, 0.0f }, RED);
-        } 
-        else 
+            DrawLine3D({ -halfSlices * spacing, 0.0f, 0.0f }, { halfSlices * spacing, 0.0f, 0.0f }, BLUE);
+            DrawLine3D({ 0.0f, -halfSlices * spacing, 0.0f }, { 0.0f, halfSlices * spacing, 0.0f }, RED);
+        }
+        else
         {
-            DrawLine3D({ -halfSlices*spacing, i*spacing, 0.0f }, { halfSlices*spacing, i*spacing, 0.0f }, LIGHTGRAY);
-            DrawLine3D({ i*spacing, -halfSlices*spacing, 0.0f }, { i*spacing, halfSlices*spacing, 0.0f }, LIGHTGRAY);
+            DrawLine3D({ -halfSlices * spacing, i * spacing, 0.0f }, { halfSlices * spacing, i * spacing, 0.0f }, LIGHTGRAY);
+            DrawLine3D({ i * spacing, -halfSlices * spacing, 0.0f }, { i * spacing, halfSlices * spacing, 0.0f }, LIGHTGRAY);
         }
     }
 }
 
 // --- Entity Management Function ---
-void CreateEntity(flecs::world& world) 
+void CreateEntity(flecs::world& world)
 {
     Vector3 newPos;
     bool positionIsValid;
@@ -190,41 +216,43 @@ void CreateEntity(flecs::world& world)
     const GameState& game_state = world.get<GameState>();
 
 
-    do 
+    do
     {
         positionIsValid = true;
-        newPos = 
-        { 
-            GetRandomFloat(-game_state.gridSize + game_state.entitySize, game_state.gridSize - game_state.entitySize),
-            GetRandomFloat(-game_state.gridSize + game_state.entitySize, game_state.gridSize - game_state.entitySize),
-            0.0f 
-        };
-        world.each([&](flecs::entity existing_entity, const Position& existing_pos) 
+        newPos =
         {
-            if (Vector3Distance(newPos, existing_pos.value) < game_state.entitySize * 2.0f)
+            GetRandomFloat(-game_state.gridSize + game_state.entitySize, game_state.gridSize - game_state.entitySize),
+            GetRandomFloat(-game_state.gridSize + game_state.entitySize, game_state.gridSize - game_state.entitySize),
+            0.0f
+        };
+        world.each([&](flecs::entity existing_entity, const Position& existing_pos)
             {
-                positionIsValid = false;
-            }
-        });
+                if (Vector3Distance(newPos, existing_pos.value) < game_state.entitySize * 2.0f)
+                {
+                    positionIsValid = false;
+                }
+            });
         retries++;
     } while (!positionIsValid && retries < maxRetries);
 
-    if (!positionIsValid) 
+    if (!positionIsValid)
     {
         TraceLog(LOG_WARNING, "Failed to find a valid position for new entity after %d retries.", maxRetries);
         return; // Failed to find a spot
     }
 
     Vector3 randomVelocity = { GetRandomFloat(-1.0f, 1.0f), GetRandomFloat(-1.0f, 1.0f), 0.0f };
-    
+
     auto new_entity = world.entity()
         .set<Position>({ newPos })
         .set<Velocity>({ Vector3Scale(Vector3Normalize(randomVelocity), game_state.entitySpeed) })
-        .set<ColorComp>({ GetRandomColor() });
+        .set<ColorComp>({ GetRandomColor() })
+        .set<SpatialCell>({ 0, 0 });
 
     TraceLog(LOG_INFO, "Created entity %s", new_entity.name().c_str());
 }
 
+#define MYARRAYSIZE(x) (sizeof((x)) / sizeof((x)[0]))
 
 void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 {
@@ -233,18 +261,27 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
     {
     }
 
+    float yOffset = guiState.windowBoxRect.y;
+
+    //static const char* TabNames[] = { "Tab1","Tab2", "Tab3" };
+    yOffset += 30.f;
+    int TabBarResult = GuiToggleGroup({ guiState.windowBoxRect.x + 10, yOffset, 40, 25 }, "Tab1;Tab2;Tab3", &guiState.activeTab);
+
     // Get a mutable reference to the GameState singleton
     GameState& game_state = world.ensure<GameState>();
 
-    GuiLabel({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 40, 180, 25 }, TextFormat("Total Entities: %d", world.count<Position>()));
+    yOffset += 60.f;
+    GuiLabel({ guiState.windowBoxRect.x + 10, yOffset, 25 }, TextFormat("Total Entities: %d", world.count<Position>()));
 
-	int newCount = GuiSpinner({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 75, 120, 25 }, "Add/Remove", &guiState.entityCountSpinnerValue, 1, 100, false);
+    yOffset += 30.f;
+	int newCount = GuiSpinner({ guiState.windowBoxRect.x + 10, yOffset, 120, 25 }, "Add/Remove", &guiState.entityCountSpinnerValue, 1, 100, false);
 // 	if (newCount)
 //     {
 //         guiState.entityCountSpinnerValue += newCount;
 //     }
-
-    if (GuiButton({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 110, 85, 30 }, "Add"))
+    
+    yOffset += 30.f;
+    if (GuiButton({ guiState.windowBoxRect.x + 10, yOffset, 85, 30 }, "Add"))
     {
         for (int i = 0; i < guiState.entityCountSpinnerValue; ++i)
         {
@@ -252,7 +289,8 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
         }
     }
 
-    if (GuiButton({ guiState.windowBoxRect.x + 105, guiState.windowBoxRect.y + 110, 85, 30 }, "Remove"))
+    yOffset += 30.f;
+    if (GuiButton({ guiState.windowBoxRect.x + 105, yOffset, 85, 30 }, "Remove"))
     {
 //         auto q = world.query<Position>();
 //         int count_to_remove = guiState.entityCountSpinnerValue;
@@ -287,23 +325,27 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
         }
     }
 
-    if (GuiButton({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 150, 180, 30 }, "Remove All"))
+    yOffset += 30.f;
+    if (GuiButton({ guiState.windowBoxRect.x + 10, yOffset, 180, 30 }, "Remove All"))
     {
         TraceLog(LOG_INFO, "Removing all entities.");
 		world.delete_with<Position>(); // Deletes all entities with Position
     }
 
-    GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 190, 90, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
+    yOffset += 30.f;
+    GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
 
-	GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 230, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 0.01f, 100.0f);
+    yOffset += 30.f;
+	GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 0.01f, 100.0f);
 
-    if (GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 270, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 0.f, 5000.f))
+    yOffset += 30.f;
+    if (GuiSlider({ guiState.windowBoxRect.x + 80, yOffset, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 0.f, 5000.f))
     {
         world.modified<GameState>();
     }
 
-
-    GuiCheckBox({ guiState.windowBoxRect.x + 10, guiState.windowBoxRect.y + 310, 40, 25 }, "Render entities:", &game_state.renderEntities);
+    yOffset += 30.f;
+    GuiCheckBox({ guiState.windowBoxRect.x + 10, yOffset, 40, 25 }, "Render entities:", &game_state.renderEntities);
 }
 
 void DrawLogPanel()
@@ -423,67 +465,106 @@ void DeclareMoveSystem(flecs::world& world)
          });
 }
 
-struct CollideSystem{};
-void DeclareCollideSystem(flecs::world& world)
+// Clear spatial buckets once per frame before filling them
+struct ClearSpatialBucketsSystem{};
+void DeclareClearSpatialBucketsSystem(flecs::world& world)
 {
-    // System to handle entity-entity collisions with position correction
-    world.system<Position, Velocity, ColorComp>("Collide")
-        //.multi_threaded()
-        //.kind<CollideSystem>()
-        .each([&](flecs::entity e1, Position& p1, Velocity& v1, ColorComp& c1)
+    world.system<>("ClearSpatialBuckets")
+        .each([&]()
         {
-            const GameState& game_state = world.get<GameState>();
-
-            // This inner loop creates pairs of entities for collision checks (e1, e2)
-            world.each([&](flecs::entity e2, Position& p2, Velocity& v2, ColorComp& c2)
-            {
-                if (e1.id() >= e2.id())
-                {
-                    // Skip self-collision and avoid duplicate pairs
-                    return;
-                }
-
-                float distance = Vector3Distance(p1.value, p2.value);
-                float requiredDistance = game_state.entitySize * 2.0f;
-
-                if (distance < requiredDistance)
-                {
-                    //TraceLog(LOG_INFO, "Collision between %s and %s", e1.name().c_str(), e2.name().c_str());
-                    // 1. Position Correction (Push Apart)
-                    float overlap = requiredDistance - distance;
-                    Vector3 direction = Vector3Normalize(Vector3Subtract(p1.value, p2.value));
-                    if (distance == 0.0f) direction = { 1, 0, 0 }; // Avoid division by zero if perfectly overlapped
-
-                    Vector3 p1_move = Vector3Scale(direction, overlap * 0.5f);
-                    Vector3 p2_move = Vector3Scale(direction, -overlap * 0.5f);
-
-                    p1.value = Vector3Add(p1.value, p1_move);
-                    p2.value = Vector3Add(p2.value, p2_move);
-
-                    // 2. Velocity Update (Bounce)
-                    // Reflect velocity along the collision normal (direction vector)
-                    v1.value = Vector3Reflect(v1.value, direction);
-                    v2.value = Vector3Reflect(v2.value, Vector3Negate(direction));
-
-                    // 3. Change color on bounce
-                    c1.value = GetRandomColor();
-                    c2.value = GetRandomColor();
-                }
-            });
+            g_cellBuckets.clear();
         });
 }
 
-void CreateInitialEntities(flecs::world ecs)
+// Update spatial cell for each entity and fill buckets
+struct UpdateSpatialCellSystem{};
+void DeclareUpdateSpatialCellSystem(flecs::world& world)
 {
-    // --- Entity Creation with overlap prevention ---
-    for (int i = 0; i < INITIAL_ENTITY_COUNT; ++i)
-    {
-        CreateEntity(ecs);
-    }
+    world.system<const Position, SpatialCell>("UpdateSpatialCell")
+        .each([&](flecs::entity e, const Position& p, SpatialCell& sc)
+        {
+            const GameState& game_state = world.get<GameState>();
+            const float cellSize = std::max(game_state.entitySize * 2.0f, 1.0f);
+            auto [cx, cy] = ComputeCell(p.value, cellSize);
+            sc.cellX = cx;
+            sc.cellY = cy;
+            g_cellBuckets[CellKey(cx, cy)].push_back(e);
+        });
 }
 
-void RenderEntities(GameData& gameData)
-{
+ struct CollideSystem{};
+ void DeclareCollideSystem(flecs::world& world)
+ {
+    // System to handle entity-entity collisions with position correction using spatial grid buckets
+    world.system<Position, Velocity, ColorComp, const SpatialCell>("Collide")
+        //.multi_threaded()
+        //.kind<CollideSystem>()
+        .each([&](flecs::entity e1, Position& p1, Velocity& v1, ColorComp& c1, const SpatialCell& sc1)
+        {
+            const GameState& game_state = world.get<GameState>();
+            const float requiredDistance = game_state.entitySize * 2.0f;
+
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    const int nx = sc1.cellX + dx;
+                    const int ny = sc1.cellY + dy;
+                    auto it = g_cellBuckets.find(CellKey(nx, ny));
+                    if (it == g_cellBuckets.end()) continue;
+
+                    const auto& bucket = it->second;
+                    for (const flecs::entity& e2 : bucket)
+                    {
+                        if (e1.id() >= e2.id())
+                        {
+                            // Skip self and ensure each pair only processed once
+                            continue;
+                        }
+
+                        auto& p2 = e2.get_mut<Position>();
+                        auto& v2 = e2.get_mut<Velocity>();
+                        auto& c2 = e2.get_mut<ColorComp>();
+
+                        const float distance = Vector3Distance(p1.value, p2.value);
+                        if (distance < requiredDistance)
+                        {
+                            float overlap = requiredDistance - distance;
+                            Vector3 direction = (distance > 0.0f)
+                                ? Vector3Normalize(Vector3Subtract(p1.value, p2.value))
+                                : Vector3{1, 0, 0};
+
+                            Vector3 p1_move = Vector3Scale(direction, overlap * 0.5f);
+                            Vector3 p2_move = Vector3Scale(direction, -overlap * 0.5f);
+
+                            p1.value = Vector3Add(p1.value, p1_move);
+                            p2.value = Vector3Add(p2.value, p2_move);
+
+                            // Reflect velocities
+                            v1.value = Vector3Reflect(v1.value, direction);
+                            v2.value = Vector3Reflect(v2.value, Vector3Negate(direction));
+
+                            // Change colors
+                            c1.value = GetRandomColor();
+                            c2.value = GetRandomColor();
+                        }
+                    }
+                }
+            }
+        });
+ }
+
+ void CreateInitialEntities(flecs::world ecs)
+ {
+     // --- Entity Creation with overlap prevention ---
+     for (int i = 0; i < INITIAL_ENTITY_COUNT; ++i)
+     {
+         CreateEntity(ecs);
+     }
+ }
+
+ void RenderEntities(GameData& gameData)
+ {
 	const GameState& game_state = gameData.world->get<GameState>();
 	if (!game_state.renderEntities)
 	{
@@ -526,71 +607,69 @@ void RenderEntities(GameData& gameData)
          gameData.renderingData.material,
          gameData.renderingData.transforms.data(),
          gameData.renderingData.transforms.size());
+ }
+
+ void DoMainGameLoop(GameData& gameData)
+ {
+     // --- Main Game Loop ---
+     while (!WindowShouldClose())
+     {
+         // --- Update ---
+         if (IsKeyPressed(KEY_W))
+         {
+             gameData.cameraControlsEnabled = !gameData.cameraControlsEnabled;
+         }
+
+         if (gameData.cameraControlsEnabled)
+         {
+             UpdateCamera(&gameData.camera, CAMERA_FREE /*CAMERA_ORBITAL*/); // Enable orbital camera controls
+         }
 
 
-}
+         const float frameTime = GetFrameTime();
+         gameData.world->progress(frameTime); // This runs all the systems
 
-void DoMainGameLoop(GameData& gameData)
-{
-    // --- Main Game Loop ---
-    while (!WindowShouldClose())
-    {
-        // --- Update ---
-        if (IsKeyPressed(KEY_W))
-        {
-            gameData.cameraControlsEnabled = !gameData.cameraControlsEnabled;
-        }
+         // --- Draw ---
+         BeginDrawing();
+         ClearBackground(RAYWHITE);
 
-        if (gameData.cameraControlsEnabled)
-        {
-            UpdateCamera(&gameData.camera, CAMERA_FREE /*CAMERA_ORBITAL*/); // Enable orbital camera controls
-        }
+         BeginMode3D(gameData.camera);
 
+         const GameState& game_state = gameData.world->get<GameState>();
 
-        const float frameTime = GetFrameTime();
-        gameData.world->progress(frameTime); // This runs all the systems
+         // Draw the grid on the X/Y plane
+         DrawXYGrid(50, 100.0f);
+         DrawCubeWiresV({ 0, 0, 0 }, { game_state.gridSize * 2, game_state.gridSize * 2, 0.1f }, DARKGRAY);
 
-        // --- Draw ---
-        BeginDrawing();
-        ClearBackground(RAYWHITE);
-
-        BeginMode3D(gameData.camera);
-
-        const GameState& game_state = gameData.world->get<GameState>();
-
-        // Draw the grid on the X/Y plane
-        DrawXYGrid(50, 100.0f);
-        DrawCubeWiresV({ 0, 0, 0 }, { game_state.gridSize * 2, game_state.gridSize * 2, 0.1f }, DARKGRAY);
-
-        // Render entities
-        RenderEntities(gameData);
+         // Render entities
+         RenderEntities(gameData);
 
 
-        EndMode3D();
+         EndMode3D();
 
 
 
-        DrawGUI(gameData.guiState, *gameData.world);
+         DrawGUI(gameData.guiState, *gameData.world);
 
-        DrawLogPanel();
+         DrawLogPanel();
 
 
-        DrawText("flecs + raylib | Use mouse to control camera (orbit, zoom, pan)", 10, 10, 20, GREEN);
-        DrawFPS(10, 40);
+         DrawText("flecs + raylib | Use mouse to control camera (orbit, zoom, pan)", 10, 10, 20, GREEN);
+         DrawFPS(10, 40);
 
-        EndDrawing();
-    }
-}
+         EndDrawing();
+     }
+ }
 
-void InitCamera3D(Camera3D& camera)
-{
-    camera = { 0 };
-    camera.position = { 0.0f, 0.0f, 2000.f }; // Adjusted camera distance
-    camera.target = { 0.0f, 0.0f, 0.0f };
-    camera.up = { 0.0f, 1.0f, 0.0f };
-    camera.fovy = 45.0f;
-    camera.projection = CAMERA_PERSPECTIVE;
-}
+ void InitCamera3D(Camera3D& camera)
+ {
+     camera = { 0 };
+     camera.position = { 0.0f, 0.0f, 2000.f }; // Adjusted camera distance
+     camera.target = { 0.0f, 0.0f, 0.0f };
+     camera.up = { 0.0f, 1.0f, 0.0f };
+     camera.fovy = 45.0f;
+     camera.projection = CAMERA_PERSPECTIVE;
+ }
 
 
 // /** OS API log function type. */
@@ -601,8 +680,8 @@ void InitCamera3D(Camera3D& camera)
 // 	int32_t line,      /* Line it was logged */
 // 	const char* msg);
 
-void OnFlecsLogCallback(int level, const char* file, int32_t line, const char* msg)
-{
+ void OnFlecsLogCallback(int level, const char* file, int32_t line, const char* msg)
+ {
 	// Example: print only warnings and errors
 	if (level >= 1)
 	{
@@ -612,11 +691,11 @@ void OnFlecsLogCallback(int level, const char* file, int32_t line, const char* m
 	}
 
 
-}
+ }
 
 
-void InitFlecs(GameData& gameData)
-{
+ void InitFlecs(GameData& gameData)
+ {
 	gameData.world = new flecs::world();
 
 	ecs_os_api.log_ = OnFlecsLogCallback;
@@ -625,11 +704,11 @@ void InitFlecs(GameData& gameData)
 
 
     gameData.world->set_threads(4);
-}
+ }
 
 
-void InitRenderingData(RenderingData& renderingData)
-{
+ void InitRenderingData(RenderingData& renderingData)
+ {
 
     std::string lighting_instancing_vs = TextFormat("res/shaders/glsl%i/lighting_instancing.vs", GLSL_VERSION);
     std::string lighting_fs = TextFormat("res/shaders/glsl%i/lighting.fs", GLSL_VERSION);
@@ -689,11 +768,11 @@ void InitRenderingData(RenderingData& renderingData)
 //     const bool shaderValid = IsShaderValid(renderingData.shader);
 //     TraceLog(LOG_INFO, "shaderValid %s", shaderValid ? "true" : "false");
 
-}
+ }
 
 
-void DeclareECS(GameData& gameData)
-{
+ void DeclareECS(GameData& gameData)
+ {
 
 //     FixedTickDesc.RenderInterpPipeline = ecs.pipeline()
 //         .with(flecs::System)
@@ -719,6 +798,8 @@ void DeclareECS(GameData& gameData)
 
     DeclareGameStateObserver(*gameData.world);
     DeclareMoveSystem(*gameData.world);
+    DeclareClearSpatialBucketsSystem(*gameData.world);
+    DeclareUpdateSpatialCellSystem(*gameData.world);
     DeclareCollideSystem(*gameData.world);
     DeclareBounceSystem(*gameData.world);
 
@@ -726,10 +807,10 @@ void DeclareECS(GameData& gameData)
 	gameData.world->set<GameState>({});
 
 
-}
+ }
 
-int main(void)
-{
+ int main(void)
+ {
 
     GameData gameData;
 
@@ -768,4 +849,4 @@ int main(void)
     CloseWindow();
 
     return 0;
-}
+ }
