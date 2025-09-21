@@ -75,8 +75,8 @@ struct GameState
 {
     bool renderEntities = true;
     float gridSize = 250.0f;
-	float entitySize = 10.0f; // Increased entity size
-	float entitySpeed = 1500.0f; // Adjusted for better visualization
+	float entitySize = 10.0f;
+	float entitySpeed = 1500.0f;
 };
 
 
@@ -295,9 +295,9 @@ void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 
     GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 190, 90, 25 }, "Grid Size:", TextFormat("%.0f", game_state.gridSize), &game_state.gridSize, 100.0f, 1000.0f);
 
-	GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 230, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 10.f, 100.0f);
+	GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 230, 90, 25 }, "Entity Size:", TextFormat("%.0f", game_state.entitySize), &game_state.entitySize, 0.01f, 100.0f);
 
-    if (GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 270, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 100.f, 5000.f))
+    if (GuiSlider({ guiState.windowBoxRect.x + 80, guiState.windowBoxRect.y + 270, 90, 25 }, "Entity speed:", TextFormat("%.0f", game_state.entitySpeed), &game_state.entitySpeed, 0.f, 5000.f))
     {
         world.modified<GameState>();
     }
@@ -673,7 +673,7 @@ void InitRenderingData(RenderingData& renderingData)
 // 	matDefault.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
 
 
-    static float cubeSize = 10.f;
+    static float cubeSize = 1.f;
     renderingData.cube = GenMeshSphere(cubeSize, 32, 32); //GenMeshCube(cubeSize, cubeSize, cubeSize);
     renderingData.material = matInstances;
 
