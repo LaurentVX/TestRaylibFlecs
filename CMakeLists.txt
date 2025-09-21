@@ -146,3 +146,26 @@ target_link_libraries(MyProject PRIVATE
 
 # Build dependencies as static libraries
 #set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build dependencies as static libraries")
+
+# Plan:
+# - After creating target MyProject, define RES_DIR as ${CMAKE_SOURCE_DIR}/res.
+# - If RES_DIR exists, add a POST_BUILD command that:
+#   - removes the existing output res dir (to avoid stale files),
+#   - recreates it, and copies the entire res directory to $<TARGET_FILE_DIR:MyProject>/res.
+# - If RES_DIR does not exist, emit a warning.
+
+# Copy `res` folder next to the produced executable after build
+#set(RES_DIR "${CMAKE_SOURCE_DIR}/res")
+#if(EXISTS "${RES_DIR}")
+#  add_custom_command(TARGET MyProject POST_BUILD
+#    COMMAND ${CMAKE_COMMAND} -E echo "Copying res -> $<TARGET_FILE_DIR:MyProject>/res"
+#    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:MyProject>/res"
+#    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:MyProject>/res"
+#    COMMAND ${CMAKE_COMMAND} -E copy_directory "${RES_DIR}" "$<TARGET_FILE_DIR:MyProject>/res"
+#    COMMENT "Copying resource folder 'res' to target output directory"
+#    VERBATIM
+#  )
+#else()
+#  message(WARNING "Resource folder not found: ${RES_DIR}")
+#endif()
+#

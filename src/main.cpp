@@ -1,5 +1,4 @@
-#include "raylib.h"
-#include "raymath.h" // Required for Vector3 functions
+
 #include "flecs.h"
 #include <vector>
 #include <random>
@@ -12,6 +11,19 @@
 //I have removed the #define RAYGUI_IMPLEMENTATION line.This ensures that the implementation is only compiled once in the raygui_impl.cpp file that CMake generates, which will resolve the linker error.
 //#define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
+#include "raylib.h"
+#include "raymath.h" // Required for Vector3 functions
+
+#define RLIGHTS_IMPLEMENTATION
+#include "./rlights.h"
+#include "../out/build/x64-Debug/_deps/raylib-build/raylib/include/rlgl.h"
+
+
+#if defined(PLATFORM_DESKTOP)
+#define GLSL_VERSION            330
+#else   // PLATFORM_ANDROID, PLATFORM_WEB
+#define GLSL_VERSION            100
+#endif
 
 
 // --- Log Buffer ---
@@ -66,6 +78,43 @@ struct GameState
 	float entitySize = 10.0f; // Increased entity size
 	float entitySpeed = 1500.0f; // Adjusted for better visualization
 };
+
+
+struct RenderingData
+{
+    Mesh cube;// = GenMeshCube(1.0f, 1.0f, 1.0f);
+    Model model;// = LoadModelFromMesh(cube);
+    Material material;
+
+    Shader shader;// = LoadShader(0, "resources/shaders/glsl330/instancing.fs");
+    std::vector<Matrix> transforms;
+};
+
+
+//Camera3D camera, MyProjectGuiState& guiState, flecs::world& world
+
+// --- GUI State ---
+struct MyProjectGuiState
+{
+	int entityCountSpinnerValue = 1;
+	//bool entityCountSpinnerEditMode = false;
+	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 360 };
+};
+
+
+struct GameData
+{
+    RenderingData renderingData;
+    Camera3D camera;
+    MyProjectGuiState guiState;
+    flecs::world* world;
+
+	bool cameraControlsEnabled = true;
+
+	//MyProjectGuiState projectGuiState;
+};
+
+
 
 flecs::query<const GameState> get_game_state_query(const flecs::world& world)
 {
@@ -176,13 +225,6 @@ void CreateEntity(flecs::world& world)
     TraceLog(LOG_INFO, "Created entity %s", new_entity.name().c_str());
 }
 
-// --- GUI State ---
-struct MyProjectGuiState
-{
-	int entityCountSpinnerValue = 1;
-	//bool entityCountSpinnerEditMode = false;
-	Rectangle windowBoxRect = { (float)SCREEN_WIDTH - 220, 20, 200, 360 };
-};
 
 void DrawGUI(MyProjectGuiState& guiState, flecs::world& world)
 {
@@ -311,10 +353,14 @@ void DrawLogPanel()
     GuiSetStyle(DEFAULT, TEXT_ALIGNMENT, TEXT_ALIGN_CENTER);
 }
 
+
+struct BounceSystem{};
 void DeclareBounceSystem(flecs::world& world)
 {
     // System to handle bouncing off grid boundaries, accounting for sphere radius
     world.system<Position, Velocity, ColorComp>("Bounce")
+		//.multi_threaded()
+        //.kind<BounceSystem>()
         .each([&](Position& p, Velocity& v, ColorComp& c)
             {
 				const GameState& game_state = world.get<GameState>();
@@ -344,9 +390,11 @@ void DeclareBounceSystem(flecs::world& world)
             });
 }
 
+struct StateObserverSystem{ };
 void DeclareGameStateObserver(flecs::world& world)
 {
     world.observer<GameState>()
+        //.kind<StateObserverSystem>()
         .event(flecs::OnSet)
         .each([&](flecs::entity e, GameState& gs)
         {
@@ -360,25 +408,28 @@ void DeclareGameStateObserver(flecs::world& world)
         });
 }
 
+
+struct MoveSystem{};
 void DeclareMoveSystem(flecs::world& world)
 {
     // System to update position based on velocity
     world.system<Position, const Velocity>("Move")
+		//.multi_threaded()
+        //.kind<MoveSystem>()
         .each([&](flecs::entity e, Position& p, const Velocity& v)
          {
             const float clampedDeltaTime = std::min(world.delta_time(), 0.33f);
             p.value = Vector3Add(p.value, Vector3Scale(v.value, clampedDeltaTime));
          });
-
-
-
-
 }
 
+struct CollideSystem{};
 void DeclareCollideSystem(flecs::world& world)
 {
     // System to handle entity-entity collisions with position correction
     world.system<Position, Velocity, ColorComp>("Collide")
+        //.multi_threaded()
+        //.kind<CollideSystem>()
         .each([&](flecs::entity e1, Position& p1, Velocity& v1, ColorComp& c1)
         {
             const GameState& game_state = world.get<GameState>();
@@ -431,21 +482,55 @@ void CreateInitialEntities(flecs::world ecs)
     }
 }
 
-void RenderEntities(flecs::world& world)
+void RenderEntities(GameData& gameData)
 {
-    world.each([&](flecs::entity e, const Position& p, const ColorComp& c)
-    {
-        const GameState& game_state = world.get<GameState>();
-        if (!game_state.renderEntities)
-        {
-            return;
-        }
+	const GameState& game_state = gameData.world->get<GameState>();
+	if (!game_state.renderEntities)
+	{
+		return;
+	}
 
-        DrawSphere(p.value, game_state.entitySize, c.value);
+    auto q = gameData.world->query<Position>();
+	int count = q.count();
+
+    gameData.renderingData.transforms.resize(count);
+
+    int index = 0;
+    gameData.world->each([&](flecs::entity e, const Position& p, const ColorComp& c)
+    {
+
+        Matrix& EntityTransform = gameData.renderingData.transforms[index];
+        //EntityTransform = ;
+        EntityTransform = MatrixScale(game_state.entitySize, game_state.entitySize, game_state.entitySize) * MatrixTranslate(p.value.x, p.value.y, p.value.z);
+        index++;
+
+        //DrawSphere(p.value, game_state.entitySize, c.value);
     });
+
+
+	// Draw meshes instanced using material containing instancing shader (RED + lighting),
+    // transforms[] for the instances should be provided, they are dynamically
+    // updated in GPU every frame, so we can animate the different mesh instances
+// 	DrawMeshInstanced(gameData.renderingData.cube,
+//         gameData.renderingData.matInstances, gameData.renderingData.transforms.data(), MAX_INSTANCES);
+
+//     static Matrix* transforms = (Matrix*)RL_CALLOC(1, sizeof(Matrix));
+//     transforms[0] = MatrixIdentity();;
+// 
+//     Matrix matrixIdentity = MatrixIdentity();
+//     Material matDefault = LoadMaterialDefault();
+//     matDefault.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
+//     DrawMeshInstanced(gameData.renderingData.cube, matDefault, transforms, 1);
+
+ 	DrawMeshInstanced(gameData.renderingData.cube, 
+         gameData.renderingData.material,
+         gameData.renderingData.transforms.data(),
+         gameData.renderingData.transforms.size());
+
+
 }
 
-void DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, MyProjectGuiState& guiState, flecs::world& world)
+void DoMainGameLoop(GameData& gameData)
 {
     // --- Main Game Loop ---
     while (!WindowShouldClose())
@@ -453,39 +538,39 @@ void DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, MyProjectGuiSta
         // --- Update ---
         if (IsKeyPressed(KEY_W))
         {
-            cameraControlsEnabled = !cameraControlsEnabled;
+            gameData.cameraControlsEnabled = !gameData.cameraControlsEnabled;
         }
 
-        if (cameraControlsEnabled)
+        if (gameData.cameraControlsEnabled)
         {
-            UpdateCamera(&camera, CAMERA_FREE /*CAMERA_ORBITAL*/); // Enable orbital camera controls
+            UpdateCamera(&gameData.camera, CAMERA_FREE /*CAMERA_ORBITAL*/); // Enable orbital camera controls
         }
 
 
         const float frameTime = GetFrameTime();
-        world.progress(frameTime); // This runs all the systems
+        gameData.world->progress(frameTime); // This runs all the systems
 
         // --- Draw ---
         BeginDrawing();
         ClearBackground(RAYWHITE);
 
-        BeginMode3D(camera);
+        BeginMode3D(gameData.camera);
 
-        const GameState& game_state = world.get<GameState>();
+        const GameState& game_state = gameData.world->get<GameState>();
 
         // Draw the grid on the X/Y plane
         DrawXYGrid(50, 100.0f);
         DrawCubeWiresV({ 0, 0, 0 }, { game_state.gridSize * 2, game_state.gridSize * 2, 0.1f }, DARKGRAY);
 
         // Render entities
-        RenderEntities(world);
+        RenderEntities(gameData);
 
 
         EndMode3D();
 
 
 
-        DrawGUI(guiState, world);
+        DrawGUI(gameData.guiState, *gameData.world);
 
         DrawLogPanel();
 
@@ -499,6 +584,7 @@ void DoMainGameLoop(bool cameraControlsEnabled, Camera3D camera, MyProjectGuiSta
 
 void InitCamera3D(Camera3D& camera)
 {
+    camera = { 0 };
     camera.position = { 0.0f, 0.0f, 2000.f }; // Adjusted camera distance
     camera.target = { 0.0f, 0.0f, 0.0f };
     camera.up = { 0.0f, 1.0f, 0.0f };
@@ -506,8 +592,147 @@ void InitCamera3D(Camera3D& camera)
     camera.projection = CAMERA_PERSPECTIVE;
 }
 
+
+// /** OS API log function type. */
+// typedef
+// void (*ecs_os_api_log_t)(
+// 	int32_t level,     /* Logging level */
+// 	const char* file,  /* File where message was logged */
+// 	int32_t line,      /* Line it was logged */
+// 	const char* msg);
+
+void OnFlecsLogCallback(int level, const char* file, int32_t line, const char* msg)
+{
+	// Example: print only warnings and errors
+	if (level >= 1)
+	{
+		fprintf(stderr, "Flecs Log [Level %d]: %s\n", level, msg);
+
+		TraceLog(level, msg);
+	}
+
+
+}
+
+
+void InitFlecs(GameData& gameData)
+{
+	gameData.world = new flecs::world();
+
+	ecs_os_api.log_ = OnFlecsLogCallback;
+
+	flecs::log::set_level(3);
+
+
+    gameData.world->set_threads(4);
+}
+
+
+void InitRenderingData(RenderingData& renderingData)
+{
+
+    std::string lighting_instancing_vs = TextFormat("res/shaders/glsl%i/lighting_instancing.vs", GLSL_VERSION);
+    std::string lighting_fs = TextFormat("res/shaders/glsl%i/lighting.fs", GLSL_VERSION);
+
+    if (!FileExists(lighting_instancing_vs.data()))
+    {
+        TraceLog(LOG_ERROR, "lighting_instancing_vs is invalid");
+    }
+
+	if (!FileExists(lighting_fs.data()))
+	{
+		TraceLog(LOG_ERROR, "lighting_fs is invalid");
+	}
+
+	// Load lighting shader
+	Shader shader = LoadShader(lighting_instancing_vs.data(), lighting_fs.data());
+	// Get shader locations
+	shader.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(shader, "mvp");
+	shader.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(shader, "viewPos");
+
+	// Set shader value: ambient light level
+	int ambientLoc = GetShaderLocation(shader, "ambient");
+    static const float ambientValues[] = { 0.2f, 0.2f, 0.2f, 1.0f };
+	SetShaderValue(shader, ambientLoc, ambientValues, SHADER_UNIFORM_VEC4);
+
+ 	// Create one light
+    const Vector3 lightValue = { 50.0f, 50.0f, 0.0f };
+ 	CreateLight(LIGHT_DIRECTIONAL, lightValue, Vector3Zero(), WHITE, shader);
+
+	// NOTE: We are assigning the intancing shader to material.shader
+	// to be used on mesh drawing with DrawMeshInstanced()
+	Material matInstances = LoadMaterialDefault();
+	matInstances.shader = shader;
+	matInstances.maps[MATERIAL_MAP_DIFFUSE].color = RED;
+
+// 	// Load default material (using raylib intenral default shader) for non-instanced mesh drawing
+// 	// WARNING: Default shader enables vertex color attribute BUT GenMeshCube() does not generate vertex colors, so,
+// 	// when drawing the color attribute is disabled and a default color value is provided as input for thevertex attribute
+// 	Material matDefault = LoadMaterialDefault();
+// 	matDefault.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
+// 	matDefault.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
+
+
+    static float cubeSize = 10.f;
+    renderingData.cube = GenMeshSphere(cubeSize, 32, 32); //GenMeshCube(cubeSize, cubeSize, cubeSize);
+    renderingData.material = matInstances;
+
+//     static float cubeSize = 100.f;
+// 
+//     renderingData.cube = GenMeshCube(cubeSize, cubeSize, cubeSize);
+//     renderingData.model = LoadModelFromMesh(renderingData.cube);
+// 
+//     renderingData.shader = LoadShader(0, "resources/shaders/glsl330/instancing.fs");
+//     renderingData.model.materials[0].shader = renderingData.shader;
+
+
+//     const bool shaderValid = IsShaderValid(renderingData.shader);
+//     TraceLog(LOG_INFO, "shaderValid %s", shaderValid ? "true" : "false");
+
+}
+
+
+void DeclareECS(GameData& gameData)
+{
+
+//     FixedTickDesc.RenderInterpPipeline = ecs.pipeline()
+//         .with(flecs::System)
+//         .with(flecs::Phase)
+//         .cascade().trav(flecs::DependsOn)
+//         .with(flecs::DependsOn)
+//         .second<Pipeline::Render>()
+//         .trav(flecs::DependsOn).build();
+
+// 	// Create custom pipeline
+// 	flecs::entity pipeline = gameData.world->pipeline()
+// 		.with(flecs::System)
+// 		//.with<GameStateObserver>()
+// 		.with<MoveSystem>()
+// 		//.with<CollideSystem>()
+// 		//.with<BounceSystem>()
+// 		.build();
+
+	//gameData.world->set_pipeline(pipeline);
+    
+//     flecs::entity getPipelineResult = gameData.world->get_pipeline();
+//     const bool isPipelineValid = getPipelineResult.is_valid();
+
+    DeclareGameStateObserver(*gameData.world);
+    DeclareMoveSystem(*gameData.world);
+    DeclareCollideSystem(*gameData.world);
+    DeclareBounceSystem(*gameData.world);
+
+	// singletons
+	gameData.world->set<GameState>({});
+
+
+}
+
 int main(void)
 {
+
+    GameData gameData;
+
     // --- Initialization ---
     SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "flecs + raylib - ECS Collision Demo");
@@ -519,30 +744,24 @@ int main(void)
     TraceLog(LOG_INFO, "Application started.");
 
     // --- Flecs World Setup ---
-    flecs::world world;
+    InitFlecs(gameData);
 
+    InitRenderingData(gameData.renderingData);
 
-    // singletons
-    world.set<GameState>({});
 
     // --- Systems Definition ---
-    DeclareGameStateObserver(world);
-    DeclareMoveSystem(world);
-    DeclareCollideSystem(world);
-    DeclareBounceSystem(world);
+    DeclareECS(gameData);
 
-    CreateInitialEntities(world);
+
+    CreateInitialEntities(*gameData.world);
 
     // --- Raylib Camera Setup ---
-    Camera3D camera = { 0 };
-    InitCamera3D(camera);
+    InitCamera3D(gameData.camera);
 
 
-    bool cameraControlsEnabled = true;
 
-    MyProjectGuiState projectGuiState;
 
-    DoMainGameLoop(cameraControlsEnabled, camera, projectGuiState, world);
+    DoMainGameLoop(gameData);
 
 
     // --- De-Initialization ---
