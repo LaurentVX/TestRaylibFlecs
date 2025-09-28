@@ -5,7 +5,6 @@
 #include <iostream>
 #include <string>
 #include <mutex>
-#include <stdarg.h>
 #include <unordered_map>
 #include <cstdint>
 #include <cmath>
@@ -19,6 +18,7 @@
 #define RLIGHTS_IMPLEMENTATION
 #include "./rlights.h"
 #include "../out/build/x64-Debug/_deps/raylib-build/raylib/include/rlgl.h"
+#include "../out/build/x64-Debug/_deps/raylib-src/src/external/glfw/deps/glad/vulkan.h"
 
 
 #if defined(PLATFORM_DESKTOP)
@@ -84,12 +84,19 @@ struct GameState
 
 struct RenderingData
 {
-    Mesh cube;// = GenMeshCube(1.0f, 1.0f, 1.0f);
-    Model model;// = LoadModelFromMesh(cube);
+    Mesh cube;
+    Model model;
     Material material;
 
-    Shader shader;// = LoadShader(0, "resources/shaders/glsl330/instancing.fs");
+    Shader shader;
     std::vector<Matrix> transforms;
+
+    // Per-instance color data
+    std::vector<Color> instanceColors;
+    Texture2D instanceColorTex = { 0 };
+
+    int locInstanceCount = -1;
+    int locInstanceColors = -1;
 };
 
 
@@ -159,6 +166,14 @@ struct Velocity { Vector3 value; };
 struct ColorComp
 {
     Color value;
+};
+
+// Accumulated collision response to apply after broadphase/border checks
+struct CollisionResponse
+{
+    Vector3 posDelta{ 0, 0, 0 };
+    Vector3 velDelta{ 0, 0, 0 };
+    bool hasCollision{ false };
 };
 
 // --- UI State ---
@@ -247,7 +262,8 @@ void CreateEntity(flecs::world& world)
         .set<Position>({ newPos })
         .set<Velocity>({ Vector3Scale(Vector3Normalize(randomVelocity), game_state.entitySpeed) })
         .set<ColorComp>({ GetRandomColor() })
-        .set<SpatialCell>({ 0, 0 });
+        .set<SpatialCell>({ 0, 0 })
+        .set<CollisionResponse>({ Vector3Zero(), Vector3Zero(), false });
 
     TraceLog(LOG_INFO, "Created entity %s", new_entity.name().c_str());
 }
@@ -407,43 +423,9 @@ void DrawLogPanel()
 }
 
 
-struct BounceSystem{};
-void DeclareBounceSystem(flecs::world& world)
-{
-    // System to handle bouncing off grid boundaries, accounting for sphere radius
-    world.system<Position, Velocity, ColorComp>("Bounce")
-		//.multi_threaded()
-        //.kind<BounceSystem>()
-        .each([&](Position& p, Velocity& v, ColorComp& c)
-            {
-				const GameState& game_state = world.get<GameState>();
 
-                bool bounced = false;
-                if ((p.value.x - game_state.entitySize <= -game_state.gridSize && v.value.x < 0) || (p.value.x + game_state.entitySize >= game_state.gridSize && v.value.x > 0))
-                {
-                    v.value.x *= -1;
-                    bounced = true;
-                }
-                if ((p.value.y - game_state.entitySize <= -game_state.gridSize && v.value.y < 0) || (p.value.y + game_state.entitySize >= game_state.gridSize && v.value.y > 0))
-                {
-                    v.value.y *= -1;
-                    bounced = true;
-                }
-                // Z-axis check is included for completeness, though movement is 2D
-                if ((p.value.z - game_state.entitySize <= -game_state.gridSize && v.value.z < 0) || (p.value.z + game_state.entitySize >= game_state.gridSize && v.value.z > 0))
-                {
-                    v.value.z *= -1;
-                    bounced = true;
-                }
 
-                if (bounced)
-                {
-                    c.value = GetRandomColor();
-                }
-            });
-}
 
-struct StateObserverSystem{ };
 void DeclareGameStateObserver(flecs::world& world)
 {
     world.observer<GameState>()
@@ -461,14 +443,77 @@ void DeclareGameStateObserver(flecs::world& world)
         });
 }
 
+struct BounceSystem
+{
+};
+void DeclareDetectGridEntityCollision(flecs::world& world, const flecs::entity& inPhase)
+{
+    world.system<Position, Velocity, ColorComp, CollisionResponse>("DetectGridEntity")
+        .kind(inPhase)
+        .read<Position>()
+        .read<Velocity>()
+        .write<CollisionResponse>()
+        .each([&](Position& p, Velocity& v, ColorComp& /*c*/, CollisionResponse& resp)
+        {
+            const GameState& game_state = world.get<GameState>();
+            bool bounced = false;
+            Vector3 normal{ 0, 0, 0 };
+            Vector3 posFix{ 0, 0, 0 };
 
-struct MoveSystem{};
-void DeclareMoveSystem(flecs::world& world)
+            // Left
+            if (p.value.x - game_state.entitySize < -game_state.gridSize && v.value.x < 0)
+            {
+                float overlap = (-game_state.gridSize + game_state.entitySize) - p.value.x;
+                posFix.x += overlap;
+                normal = Vector3Add(normal, Vector3{ 1, 0, 0 });
+                bounced = true;
+            }
+            // Right
+            if (p.value.x + game_state.entitySize > game_state.gridSize && v.value.x > 0)
+            {
+                float overlap = (game_state.gridSize - game_state.entitySize) - p.value.x;
+                posFix.x += overlap;
+                normal = Vector3Add(normal, Vector3{ -1, 0, 0 });
+                bounced = true;
+            }
+            // Bottom
+            if (p.value.y - game_state.entitySize < -game_state.gridSize && v.value.y < 0)
+            {
+                float overlap = (-game_state.gridSize + game_state.entitySize) - p.value.y;
+                posFix.y += overlap;
+                normal = Vector3Add(normal, Vector3{ 0, 1, 0 });
+                bounced = true;
+            }
+            // Top
+            if (p.value.y + game_state.entitySize > game_state.gridSize && v.value.y > 0)
+            {
+                float overlap = (game_state.gridSize - game_state.entitySize) - p.value.y;
+                posFix.y += overlap;
+                normal = Vector3Add(normal, Vector3{ 0, -1, 0 });
+                bounced = true;
+            }
+
+            if (bounced)
+            {
+                // Normalize the combined normal if any component present
+                if (Vector3Length(normal) > 0.0f) normal = Vector3Normalize(normal);
+                // Compute reflected velocity; store as delta
+                Vector3 reflected = Vector3Reflect(v.value, normal);
+                resp.posDelta = Vector3Add(resp.posDelta, posFix);
+                resp.velDelta = Vector3Add(resp.velDelta, Vector3Subtract(reflected, v.value));
+                resp.hasCollision = true;
+            }
+        });
+}
+
+void DeclareMoveEntitiesSystem(flecs::world& world, const flecs::entity& inPhase)
 {
     // System to update position based on velocity
-    world.system<Position, const Velocity>("Move")
-		//.multi_threaded()
-        //.kind<MoveSystem>()
+    world.system<Position, const Velocity>("MoveEntities")
+		.multi_threaded()
+        .kind(inPhase)
+		.read<Velocity>()
+		.write<Position>()
         .each([&](flecs::entity e, Position& p, const Velocity& v)
          {
             const float clampedDeltaTime = std::min(world.delta_time(), 0.33f);
@@ -477,10 +522,10 @@ void DeclareMoveSystem(flecs::world& world)
 }
 
 // Clear spatial buckets once per frame before filling them
-struct ClearSpatialBucketsSystem{};
-void DeclareClearSpatialBucketsSystem(flecs::world& world)
+void DeclareClearSpatialBucketsSystem(flecs::world& world, const flecs::entity& inPhase)
 {
     world.system<>("ClearSpatialBuckets")
+        .kind(inPhase)
         .each([&]()
         {
             g_cellBuckets.clear();
@@ -488,10 +533,13 @@ void DeclareClearSpatialBucketsSystem(flecs::world& world)
 }
 
 // Update spatial cell for each entity and fill buckets
-struct UpdateSpatialCellSystem{};
-void DeclareUpdateSpatialCellSystem(flecs::world& world)
+void DeclareUpdateSpatialCellSystem(flecs::world& world, const flecs::entity& inPhase)
 {
     world.system<const Position, SpatialCell>("UpdateSpatialCell")
+        //.multi_threaded()
+        .kind(inPhase)
+        .read<Position>()
+        .write<SpatialCell>()
         .each([&](flecs::entity e, const Position& p, SpatialCell& sc)
         {
             const GameState& game_state = world.get<GameState>();
@@ -499,18 +547,22 @@ void DeclareUpdateSpatialCellSystem(flecs::world& world)
             auto [cx, cy] = ComputeCell(p.value, cellSize);
             sc.cellX = cx;
             sc.cellY = cy;
-            g_cellBuckets[CellKey(cx, cy)].push_back(e);
+            const int32_t cellIndex = CellKey(cx, cy);
+           // assert(cellIndex)
+            g_cellBuckets[cellIndex].push_back(e); // can cause thread collision
         });
 }
 
- struct CollideSystem{};
- void DeclareCollideSystem(flecs::world& world)
- {
-    // System to handle entity-entity collisions with position correction using spatial grid buckets
-    world.system<Position, Velocity, ColorComp, const SpatialCell>("Collide")
-        //.multi_threaded()
-        //.kind<CollideSystem>()
-        .each([&](flecs::entity e1, Position& p1, Velocity& v1, ColorComp& c1, const SpatialCell& sc1)
+ void DeclareDetectEntitiesCollision(flecs::world& world, const flecs::entity& inPhase)
+{
+    // Broadphase collision: record responses instead of directly mutating P/V
+    world.system<const Position, const Velocity, const SpatialCell, CollisionResponse>("DetectEntitiesCollision")
+        .kind(inPhase) // keep single-threaded to avoid cross-entity write races
+        .read<Position>()
+        .read<Velocity>()
+        .read<SpatialCell>()
+        .write<CollisionResponse>()
+        .each([&](flecs::entity e1, const Position& p1, const Velocity& v1, const SpatialCell& sc1, CollisionResponse& r1)
         {
             const GameState& game_state = world.get<GameState>();
             const float requiredDistance = game_state.entitySize * 2.0f;
@@ -527,43 +579,67 @@ void DeclareUpdateSpatialCellSystem(flecs::world& world)
                     const auto& bucket = it->second;
                     for (const flecs::entity& e2 : bucket)
                     {
-                        if (e1.id() >= e2.id())
-                        {
-                            // Skip self and ensure each pair only processed once
-                            continue;
-                        }
+                        if (e1.id() >= e2.id()) continue; // process pair once
 
-                        auto& p2 = e2.get_mut<Position>();
-                        auto& v2 = e2.get_mut<Velocity>();
-                        auto& c2 = e2.get_mut<ColorComp>();
+                        auto p2 = e2.get<Position>();
+                        auto v2 = e2.get<Velocity>();
+                        //if (!p2 || !v2) continue;
 
                         const float distance = Vector3Distance(p1.value, p2.value);
                         if (distance < requiredDistance)
                         {
-                            float overlap = requiredDistance - distance;
-                            Vector3 direction = (distance > 0.0f)
+                            const float overlap = requiredDistance - distance;
+                            const Vector3 direction = (distance > 0.0f)
                                 ? Vector3Normalize(Vector3Subtract(p1.value, p2.value))
-                                : Vector3{1, 0, 0};
+                                : Vector3{ 1, 0, 0 };
 
-                            Vector3 p1_move = Vector3Scale(direction, overlap * 0.5f);
-                            Vector3 p2_move = Vector3Scale(direction, -overlap * 0.5f);
+                            const Vector3 p1_move = Vector3Scale(direction, overlap * 0.5f);
+                            const Vector3 p2_move = Vector3Scale(direction, -overlap * 0.5f);
 
-                            p1.value = Vector3Add(p1.value, p1_move);
-                            p2.value = Vector3Add(p2.value, p2_move);
+                            // Record response for e1
+                            const Vector3 v1_reflect = Vector3Reflect(v1.value, direction);
+                            r1.posDelta = Vector3Add(r1.posDelta, p1_move);
+                            r1.velDelta = Vector3Add(r1.velDelta, Vector3Subtract(v1_reflect, v1.value));
+                            r1.hasCollision = true;
 
-                            // Reflect velocities
-                            v1.value = Vector3Reflect(v1.value, direction);
-                            v2.value = Vector3Reflect(v2.value, Vector3Negate(direction));
-
-                            // Change colors
-                            c1.value = GetRandomColor();
-                            c2.value = GetRandomColor();
+                            // Record response for e2
+                            auto r2 = e2.get_mut<CollisionResponse>();
+                            r2.posDelta = Vector3Add(r2.posDelta, p2_move);
+                            const Vector3 v2_reflect = Vector3Reflect(v2.value, Vector3Negate(direction));
+                            r2.velDelta = Vector3Add(r2.velDelta, Vector3Subtract(v2_reflect, v2.value));
+                            r2.hasCollision = true;
                         }
                     }
                 }
             }
         });
  }
+
+// Apply accumulated responses and reset
+void DeclareApplyCollisionResponseSystem(flecs::world& world, const flecs::entity& inPhase)
+{
+    world.system<Position, Velocity, ColorComp, CollisionResponse>("ApplyCollisionResponse")
+        .kind(inPhase)
+        .write<Position>()
+        .write<Velocity>()
+        .write<ColorComp>()
+        .write<CollisionResponse>()
+        .each([&](Position& p, Velocity& v, ColorComp &c, CollisionResponse& resp)
+        {
+            if (!resp.hasCollision)
+                return;
+
+            p.value = Vector3Add(p.value, resp.posDelta);
+            v.value = Vector3Add(v.value, resp.velDelta);
+            c.value = GetRandomColor();
+
+            // reset accumulator
+            resp.posDelta = Vector3Zero();
+            resp.velDelta = Vector3Zero();
+            resp.hasCollision = false;
+        });
+ }
+
 
  void CreateInitialEntities(flecs::world ecs)
  {
@@ -755,70 +831,43 @@ void DeclareUpdateSpatialCellSystem(flecs::world& world)
 	matInstances.shader = shader;
 	matInstances.maps[MATERIAL_MAP_DIFFUSE].color = RED;
 
-// 	// Load default material (using raylib intenral default shader) for non-instanced mesh drawing
-// 	// WARNING: Default shader enables vertex color attribute BUT GenMeshCube() does not generate vertex colors, so,
-// 	// when drawing the color attribute is disabled and a default color value is provided as input for thevertex attribute
-// 	Material matDefault = LoadMaterialDefault();
-// 	matDefault.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
-// 	matDefault.maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
-
-
-    static float cubeSize = 1.f;
-    renderingData.cube = GenMeshSphere(cubeSize, 32, 32); //GenMeshCube(cubeSize, cubeSize, cubeSize);
+    renderingData.cube = GenMeshSphere(1.f, 32, 32);
     renderingData.material = matInstances;
+    renderingData.shader = shader;
 
-//     static float cubeSize = 100.f;
-// 
-//     renderingData.cube = GenMeshCube(cubeSize, cubeSize, cubeSize);
-//     renderingData.model = LoadModelFromMesh(renderingData.cube);
-// 
-//     renderingData.shader = LoadShader(0, "resources/shaders/glsl330/instancing.fs");
-//     renderingData.model.materials[0].shader = renderingData.shader;
-
-
-//     const bool shaderValid = IsShaderValid(renderingData.shader);
-//     TraceLog(LOG_INFO, "shaderValid %s", shaderValid ? "true" : "false");
-
+    // Get uniforms for per-instance coloring
+    renderingData.locInstanceCount = GetShaderLocation(renderingData.shader, "uInstanceCount");
+    renderingData.locInstanceColors = GetShaderLocation(renderingData.shader, "uInstanceColors");
  }
 
 
  void DeclareECS(GameData& gameData)
  {
+     flecs::world* world = gameData.world;
 
-//     FixedTickDesc.RenderInterpPipeline = ecs.pipeline()
-//         .with(flecs::System)
-//         .with(flecs::Phase)
-//         .cascade().trav(flecs::DependsOn)
-//         .with(flecs::DependsOn)
-//         .second<Pipeline::Render>()
-//         .trav(flecs::DependsOn).build();
-
-// 	// Create custom pipeline
-// 	flecs::entity pipeline = gameData.world->pipeline()
-// 		.with(flecs::System)
-// 		//.with<GameStateObserver>()
-// 		.with<MoveSystem>()
-// 		//.with<CollideSystem>()
-// 		//.with<BounceSystem>()
-// 		.build();
-
-	//gameData.world->set_pipeline(pipeline);
-    
-//     flecs::entity getPipelineResult = gameData.world->get_pipeline();
-//     const bool isPipelineValid = getPipelineResult.is_valid();
+    // declare the phases
+    flecs::entity PrePhysics = world->entity("PrePhysics").add(flecs::Phase);
+    flecs::entity Physics = world->entity("Physics").add(flecs::Phase).depends_on(PrePhysics);
+    flecs::entity PostPhysics = world->entity("PostPhysics").add(flecs::Phase).depends_on(Physics);
 
     DeclareGameStateObserver(*gameData.world);
-    DeclareMoveSystem(*gameData.world);
-    DeclareClearSpatialBucketsSystem(*gameData.world);
-    DeclareUpdateSpatialCellSystem(*gameData.world);
-    DeclareCollideSystem(*gameData.world);
-    DeclareBounceSystem(*gameData.world);
 
-	// singletons
-	gameData.world->set<GameState>({});
+    // Pre-physics: build spatial grid and resolve collision responses
+    DeclareClearSpatialBucketsSystem(*gameData.world, PrePhysics);
+    DeclareUpdateSpatialCellSystem(*gameData.world, PrePhysics);
 
+    DeclareDetectEntitiesCollision(*gameData.world, PrePhysics);
+    DeclareDetectGridEntityCollision(*gameData.world, PrePhysics);
 
+    DeclareApplyCollisionResponseSystem(*gameData.world, PrePhysics);
+
+    // Integrate after applying collision responses
+    DeclareMoveEntitiesSystem(*gameData.world, PrePhysics);
+
+    // singletons
+    gameData.world->set<GameState>({});
  }
+
 
  int main(void)
  {
